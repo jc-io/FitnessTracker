@@ -71,3 +71,11 @@ export class BodyMeasurement extends Model {
   @field('value') value!: number;
   @date('logged_at') loggedAt!: Date;
 }
+
+export class CustomExercise extends Model {
+  static table = 'custom_exercises';
+  @field('name') name!: string;
+  @field('muscle') muscle!: string;
+  @field('equip') equip!: string;
+  @date('created_at') createdAt!: Date;
+}

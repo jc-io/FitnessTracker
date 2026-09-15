@@ -1,6 +1,7 @@
 {
   "name": "lifting-tracker",
   "version": "1.0.0",
+  "main": "expo/AppEntry.js",
   "private": true,
   "scripts": {
     "start": "expo start",
@@ -9,11 +10,13 @@
   },
   "dependencies": {
     "@nozbe/watermelondb": "^0.27.1",
+    "@react-native-async-storage/async-storage": "1.23.1",
     "@react-native-community/netinfo": "^11.3.1",
-    "@supabase/supabase-js": "^2.39.0",
-    "expo": "~51.0.0",
+    "@supabase/supabase-js": "^2.116.0",
+    "expo": "~51.0.39",
     "react": "18.2.0",
-    "react-native": "0.74.1"
+    "react-native": "0.74.1",
+    "react-native-url-polyfill": "^4.0.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",

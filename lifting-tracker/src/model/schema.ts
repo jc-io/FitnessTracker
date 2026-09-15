@@ -1,7 +1,7 @@
 ﻿import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const appWorkoutSchema = appSchema({
-  version: 3,
+  version: 4,
   tables: [
     tableSchema({
       name: 'workout_sessions',
@@ -53,9 +53,18 @@ export const appWorkoutSchema = appSchema({
     tableSchema({
       name: 'body_measurements',
       columns: [
-        { name: 'metric_type', type: 'string' }, // 'weight' | 'arms' | 'chest' | 'waist'
+        { name: 'metric_type', type: 'string' },
         { name: 'value', type: 'number' },
         { name: 'logged_at', type: 'number' },
+      ],
+    }),
+    tableSchema({
+      name: 'custom_exercises',
+      columns: [
+        { name: 'name', type: 'string' },
+        { name: 'muscle', type: 'string' },
+        { name: 'equip', type: 'string' },
+        { name: 'created_at', type: 'number' },
       ],
     }),
   ],

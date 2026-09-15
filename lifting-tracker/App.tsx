@@ -11,6 +11,7 @@ import {
   Modal,
   FlatList,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Database, Q } from '@nozbe/watermelondb';
 import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
@@ -22,7 +23,10 @@ import {
   RoutineTemplate,
   RoutineExercise,
   BodyMeasurement,
+  CustomExercise,
 } from './src/model/models';
+import { supabase } from './src/lib/supabase';
+import { User, Session } from '@supabase/supabase-js';
 
 const adapter = new SQLiteAdapter({
   schema: appWorkoutSchema,
@@ -39,21 +43,39 @@ export const database = new Database({
     RoutineTemplate,
     RoutineExercise,
     BodyMeasurement,
+    CustomExercise,
   ],
 });
 
-const PRESET_EXERCISES = [
+export type MuscleGroup = 'Chest' | 'Back' | 'Legs' | 'Arms' | 'Core';
+
+interface ExerciseItem {
+  id: string;
+  name: string;
+  muscle: MuscleGroup;
+  equip: string;
+  isCustom?: boolean;
+}
+
+const PRESET_EXERCISES: ExerciseItem[] = [
   { id: 'bench_press', name: 'Bench Press (Barbell)', muscle: 'Chest', equip: 'Barbell' },
+  { id: 'incline_db_press', name: 'Incline Dumbbell Press', muscle: 'Chest', equip: 'Dumbbell' },
+  { id: 'cable_fly', name: 'Cable Chest Fly', muscle: 'Chest', equip: 'Cable' },
   { id: 'squat', name: 'Squat (Barbell)', muscle: 'Legs', equip: 'Barbell' },
   { id: 'deadlift', name: 'Deadlift (Barbell)', muscle: 'Back', equip: 'Barbell' },
-  { id: 'overhead_press', name: 'Overhead Press (Barbell)', muscle: 'Shoulders', equip: 'Barbell' },
+  { id: 'leg_press', name: 'Leg Press (Machine)', muscle: 'Legs', equip: 'Machine' },
   { id: 'lat_pulldown', name: 'Lat Pulldown (Cable)', muscle: 'Back', equip: 'Cable' },
-  { id: 'incline_db_press', name: 'Incline Dumbbell Press', muscle: 'Chest', equip: 'Dumbbell' },
+  { id: 'barbell_row', name: 'Barbell Bent Over Row', muscle: 'Back', equip: 'Barbell' },
+  { id: 'overhead_press', name: 'Overhead Press (Barbell)', muscle: 'Arms', equip: 'Barbell' },
   { id: 'barbell_curl', name: 'Barbell Bicep Curl', muscle: 'Arms', equip: 'Barbell' },
   { id: 'tricep_pushdown', name: 'Triceps Rope Pushdown', muscle: 'Arms', equip: 'Cable' },
-  { id: 'leg_press', name: 'Leg Press (Machine)', muscle: 'Legs', equip: 'Machine' },
-  { id: 'cable_fly', name: 'Cable Chest Fly', muscle: 'Chest', equip: 'Cable' },
+  { id: 'hanging_leg_raise', name: 'Hanging Leg Raise', muscle: 'Core', equip: 'Bodyweight' },
+  { id: 'plank', name: 'Plank', muscle: 'Core', equip: 'Bodyweight' },
+  { id: 'ab_wheel', name: 'Ab Wheel Rollout', muscle: 'Core', equip: 'Bodyweight' },
 ];
+
+const MUSCLE_GROUPS: MuscleGroup[] = ['Chest', 'Back', 'Legs', 'Arms', 'Core'];
+const EQUIPMENT_OPTIONS = ['Barbell', 'Dumbbell', 'Machine', 'Cable', 'Bodyweight'];
 
 type SetType = 'warmup' | 'normal' | 'drop' | 'failure';
 type TabName = 'home' | 'workout' | 'profile';
@@ -80,14 +102,21 @@ interface ChartBucket {
 }
 
 export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isGuest, setIsGuest] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMode, setAuthMode] = useState<'signup' | 'signin'>('signup');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authUsername, setAuthUsername] = useState('');
+
   const [currentTab, setCurrentTab] = useState<TabName>('profile');
   const [profileSubTab, setProfileSubTab] = useState<ProfileSubTab>('statistics');
 
-  // Graph state controls
   const [timeHorizon, setTimeHorizon] = useState<TimeHorizon>('month');
   const [activeMetric, setActiveMetric] = useState<MetricType>('volume');
 
-  // Active workout
   const [activeSession, setActiveSession] = useState<WorkoutSession | null>(null);
   const [sessionExercises, setSessionExercises] = useState<SessionExercise[]>([]);
   const [setsByExercise, setSetsByExercise] = useState<{ [key: string]: ExerciseSet[] }>({});
@@ -95,20 +124,41 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [restRemaining, setRestRemaining] = useState<number | null>(null);
 
-  // Playlists (Create & Edit)
   const [routines, setRoutines] = useState<RoutineWithExercises[]>([]);
   const [routineModalVisible, setRoutineModalVisible] = useState(false);
   const [editingRoutineId, setEditingRoutineId] = useState<string | null>(null);
   const [routineNameInput, setRoutineNameInput] = useState('');
   const [selectedExercisesForRoutine, setSelectedExercisesForRoutine] = useState<string[]>([]);
 
-  // Completed workouts & Measurements
   const [historyList, setHistoryList] = useState<CompletedSessionDetails[]>([]);
   const [expandedSessionIds, setExpandedSessionIds] = useState<{ [key: string]: boolean }>({});
   const [measurements, setMeasurements] = useState<BodyMeasurement[]>([]);
   const [metricChoice, setMetricChoice] = useState<'weight' | 'arms' | 'chest' | 'waist'>('weight');
   const [metricValue, setMetricValue] = useState('');
   const [addMeasurementModal, setAddMeasurementModal] = useState(false);
+
+  // Custom Exercise State
+  const [customExercises, setCustomExercises] = useState<ExerciseItem[]>([]);
+  const [customExerciseModalVisible, setCustomExerciseModalVisible] = useState(false);
+  const [customName, setCustomName] = useState('');
+  const [customMuscle, setCustomMuscle] = useState<MuscleGroup>('Chest');
+  const [customEquip, setCustomEquip] = useState('Barbell');
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setCurrentUser(session?.user ?? null);
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setCurrentUser(session?.user ?? null);
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     async function loadData() {
@@ -124,6 +174,7 @@ export default function App() {
       await loadWorkoutHistory();
       await loadRoutines();
       await loadMeasurements();
+      await loadCustomExercises();
     }
     loadData();
   }, []);
@@ -147,6 +198,158 @@ export default function App() {
     }, 1000);
     return () => clearInterval(interval);
   }, [restRemaining]);
+
+  async function loadCustomExercises() {
+    try {
+      const records = await database
+        .get<CustomExercise>('custom_exercises')
+        .query(Q.sortBy('created_at', Q.asc))
+        .fetch();
+
+      const mapped: ExerciseItem[] = records.map((r) => ({
+        id: r.id,
+        name: r.name,
+        muscle: r.muscle as MuscleGroup,
+        equip: r.equip,
+        isCustom: true,
+      }));
+      setCustomExercises(mapped);
+    } catch (e) {
+      console.error('Custom exercise load error:', e);
+    }
+  }
+
+  // Combined catalog (Presets + User Custom Creations)
+  const allExercises = useMemo(() => {
+    return [...PRESET_EXERCISES, ...customExercises];
+  }, [customExercises]);
+
+  async function handleSaveCustomExercise() {
+    if (!customName.trim()) {
+      Alert.alert('Name Required', 'Please enter a name for the custom exercise.');
+      return;
+    }
+
+    const trimmed = customName.trim();
+    const alreadyExists = allExercises.some(
+      (e) => e.name.toLowerCase() === trimmed.toLowerCase()
+    );
+
+    if (alreadyExists) {
+      Alert.alert('Duplicate Exercise', 'An exercise with this name already exists.');
+      return;
+    }
+
+    await database.write(async () => {
+      await database.get<CustomExercise>('custom_exercises').create((rec) => {
+        rec.name = trimmed;
+        rec.muscle = customMuscle;
+        rec.equip = customEquip;
+        rec.createdAt = new Date();
+      });
+    });
+
+    setCustomName('');
+    setCustomMuscle('Chest');
+    setCustomEquip('Barbell');
+    setCustomExerciseModalVisible(false);
+    await loadCustomExercises();
+  }
+
+  async function handleAuthSubmit() {
+    if (!authEmail.trim() || !authPassword.trim()) {
+      Alert.alert('Required Fields', 'Please provide both an email and a password.');
+      return;
+    }
+
+    setAuthLoading(true);
+
+    try {
+      if (authMode === 'signup') {
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+          options: {
+            data: {
+              username: authUsername.trim() || authEmail.split('@')[0],
+            },
+          },
+        });
+
+        if (error) throw error;
+
+        if (data.session) {
+          setSession(data.session);
+          setCurrentUser(data.user);
+        } else {
+          Alert.alert('Verification Sent', 'Check your email inbox to confirm your account.');
+        }
+      } else {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword,
+        });
+
+        if (error) throw error;
+        setSession(data.session);
+        setCurrentUser(data.user);
+      }
+    } catch (err: any) {
+      const errorMsg = err?.message || '';
+      if (
+        errorMsg.includes('Network request failed') ||
+        errorMsg.includes('Failed to fetch') ||
+        errorMsg.includes('network')
+      ) {
+        Alert.alert(
+          'Backend Offline',
+          'Cannot reach the Supabase authentication server. Would you like to log in locally?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Sign In Offline',
+              onPress: () => {
+                const mockUser: any = {
+                  id: 'offline-local-user',
+                  email: authEmail.trim(),
+                  user_metadata: {
+                    username: authEmail.split('@')[0],
+                  },
+                };
+                setCurrentUser(mockUser);
+                setIsGuest(true);
+              },
+            },
+          ]
+        );
+      } else {
+        Alert.alert('Auth Error', errorMsg || 'Authentication failed.');
+      }
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleSignOut() {
+    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign Out',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await supabase.auth.signOut({ scope: 'local' });
+          } catch (err) {
+            console.warn('Network signout failed, cleared local session instead:', err);
+          } finally {
+            setSession(null);
+            setCurrentUser(null);
+            setIsGuest(false);
+          }
+        },
+      },
+    ]);
+  }
 
   async function loadWorkoutHistory() {
     try {
@@ -574,9 +777,43 @@ export default function App() {
     return Math.max(0, Math.round((end.getTime() - start.getTime()) / (1000 * 60)));
   }
 
-  // ============================================================
-  // BAR GRAPH DATA ENGINE
-  // ============================================================
+  // Muscle Distribution
+  const muscleDistribution = useMemo(() => {
+    const counts: Record<MuscleGroup, number> = {
+      Chest: 0,
+      Back: 0,
+      Legs: 0,
+      Arms: 0,
+      Core: 0,
+    };
+
+    let totalCompletedSets = 0;
+
+    historyList.forEach((h) => {
+      h.exercises.forEach((ex) => {
+        const completedSetsCount = ex.sets.filter((s) => s.isCompleted).length;
+        if (completedSetsCount === 0) return;
+
+        const found = allExercises.find((p) => p.name === ex.name);
+        const group: MuscleGroup = found?.muscle || 'Arms';
+
+        counts[group] += completedSetsCount;
+        totalCompletedSets += completedSetsCount;
+      });
+    });
+
+    return MUSCLE_GROUPS.map((group) => {
+      const setCount = counts[group];
+      const percentage = totalCompletedSets > 0 ? Math.round((setCount / totalCompletedSets) * 100) : 0;
+      return {
+        group,
+        setCount,
+        percentage,
+      };
+    });
+  }, [historyList, allExercises]);
+
+  // Bar Graph Calculations
   const graphData: ChartBucket[] = useMemo(() => {
     const now = new Date();
 
@@ -588,7 +825,6 @@ export default function App() {
     };
 
     if (timeHorizon === 'month') {
-      // 4 Weekly Buckets across the last 28 days
       const buckets: ChartBucket[] = [
         { label: 'W-3', value: 0 },
         { label: 'W-2', value: 0 },
@@ -608,7 +844,6 @@ export default function App() {
     }
 
     if (timeHorizon === 'year') {
-      // 12 Monthly Buckets (Past 12 months)
       const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       const buckets: ChartBucket[] = [];
       for (let i = 11; i >= 0; i--) {
@@ -636,11 +871,9 @@ export default function App() {
       return buckets;
     }
 
-    // ALL TIME (Grouped by Year)
     const yearMap = new Map<number, number>();
     const currentYear = now.getFullYear();
 
-    // Ensure at least the last 3 years exist in buckets
     for (let y = currentYear - 2; y <= currentYear; y++) {
       yearMap.set(y, 0);
     }
@@ -686,6 +919,112 @@ export default function App() {
     return { date: d, dayNum: d.getDate(), hasTrained: isCompleted };
   });
 
+  const getMuscleBadgeColor = (group: MuscleGroup) => {
+    switch (group) {
+      case 'Chest':
+        return '#007AFF';
+      case 'Back':
+        return '#30D158';
+      case 'Legs':
+        return '#FF9500';
+      case 'Arms':
+        return '#AF52DE';
+      case 'Core':
+        return '#FF3B30';
+      default:
+        return '#007AFF';
+    }
+  };
+
+  if (!session && !isGuest) {
+    return (
+      <SafeAreaView style={styles.authContainer}>
+        <StatusBar barStyle="light-content" backgroundColor="#121212" />
+        <ScrollView contentContainerStyle={styles.authScrollContent}>
+          <Text style={styles.authBrand}>HEVY</Text>
+          <Text style={styles.authTagline}>Track Workouts • Analyze Volume • Progressive Overload</Text>
+
+          <View style={styles.authToggleRow}>
+            <TouchableOpacity
+              style={[styles.authToggleBtn, authMode === 'signup' && styles.authToggleBtnActive]}
+              onPress={() => setAuthMode('signup')}
+            >
+              <Text style={[styles.authToggleText, authMode === 'signup' && styles.authToggleTextActive]}>
+                Create Account
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.authToggleBtn, authMode === 'signin' && styles.authToggleBtnActive]}
+              onPress={() => setAuthMode('signin')}
+            >
+              <Text style={[styles.authToggleText, authMode === 'signin' && styles.authToggleTextActive]}>
+                Sign In
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {authMode === 'signup' && (
+            <View style={styles.authInputGroup}>
+              <Text style={styles.authInputLabel}>USERNAME</Text>
+              <TextInput
+                style={styles.authInput}
+                placeholder="e.g. IronLifter"
+                placeholderTextColor="#666"
+                autoCapitalize="none"
+                value={authUsername}
+                onChangeText={setAuthUsername}
+              />
+            </View>
+          )}
+
+          <View style={styles.authInputGroup}>
+            <Text style={styles.authInputLabel}>EMAIL</Text>
+            <TextInput
+              style={styles.authInput}
+              placeholder="athlete@domain.com"
+              placeholderTextColor="#666"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              value={authEmail}
+              onChangeText={setAuthEmail}
+            />
+          </View>
+
+          <View style={styles.authInputGroup}>
+            <Text style={styles.authInputLabel}>PASSWORD</Text>
+            <TextInput
+              style={styles.authInput}
+              placeholder="••••••••"
+              placeholderTextColor="#666"
+              secureTextEntry
+              value={authPassword}
+              onChangeText={setAuthPassword}
+            />
+          </View>
+
+          <TouchableOpacity
+            style={styles.authPrimaryBtn}
+            onPress={handleAuthSubmit}
+            disabled={authLoading}
+          >
+            {authLoading ? (
+              <ActivityIndicator color="#FFF" />
+            ) : (
+              <Text style={styles.authPrimaryBtnText}>
+                {authMode === 'signup' ? 'Create Account' : 'Sign In'}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.guestBtn} onPress={() => setIsGuest(true)}>
+            <Text style={styles.guestBtnText}>Continue as Guest (Offline Only)</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#121212" />
@@ -707,9 +1046,7 @@ export default function App() {
       )}
 
       <View style={{ flex: 1 }}>
-        {/* ============================================================ */}
-        {/* HOME TAB                                                     */}
-        {/* ============================================================ */}
+        {/* HOME TAB */}
         {currentTab === 'home' && (
           <View style={{ flex: 1 }}>
             <View style={styles.homeHeader}>
@@ -813,9 +1150,7 @@ export default function App() {
           </View>
         )}
 
-        {/* ============================================================ */}
-        {/* WORKOUT TAB                                                  */}
-        {/* ============================================================ */}
+        {/* WORKOUT TAB */}
         {currentTab === 'workout' && (
           activeSession ? (
             <View style={{ flex: 1 }}>
@@ -1004,19 +1339,26 @@ export default function App() {
           )
         )}
 
-        {/* ============================================================ */}
-        {/* PROFILE TAB (Custom Interactive Bar Graph Statistics)       */}
-        {/* ============================================================ */}
+        {/* PROFILE TAB */}
         {currentTab === 'profile' && (
           <View style={{ flex: 1 }}>
             <View style={styles.profileHeader}>
               <View style={styles.avatarCircle}>
-                <Text style={styles.avatarInitials}>JC</Text>
+                <Text style={styles.avatarInitials}>
+                  {currentUser?.email ? currentUser.email.substring(0, 2).toUpperCase() : 'G'}
+                </Text>
               </View>
               <View style={{ flex: 1, marginLeft: 14 }}>
-                <Text style={styles.profileName}>Athlete Profile</Text>
-                <Text style={styles.profileMeta}>Intermediate Lifter</Text>
+                <Text style={styles.profileName}>
+                  {currentUser?.user_metadata?.username || currentUser?.email?.split('@')[0] || 'Guest Athlete'}
+                </Text>
+                <Text style={styles.profileMeta}>
+                  {currentUser ? currentUser.email : 'Local Guest Account'}
+                </Text>
               </View>
+              <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut}>
+                <Text style={styles.signOutBtnText}>Exit</Text>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.subTabNav}>
@@ -1039,10 +1381,9 @@ export default function App() {
             </View>
 
             <ScrollView style={styles.screenScroll} contentContainerStyle={{ paddingBottom: 100 }}>
-              {/* SUBTAB 1: DYNAMIC STATISTICS BAR GRAPH */}
+              {/* STATISTICS */}
               {profileSubTab === 'statistics' && (
                 <View>
-                  {/* Total Quick Glance Ribbon */}
                   <View style={styles.statGrid}>
                     <View style={styles.statBox}>
                       <Text style={styles.statBoxValue}>{totalWorkoutsCount}</Text>
@@ -1062,11 +1403,56 @@ export default function App() {
                     </View>
                   </View>
 
-                  {/* BAR GRAPH CARD CONTAINER */}
+                  {/* MUSCLE DISTRIBUTION */}
                   <View style={styles.chartCard}>
                     <View style={styles.chartHeaderBlock}>
                       <View>
-                        <Text style={styles.chartTitle}>Progress Analytics</Text>
+                        <Text style={styles.chartTitle}>TARGET MUSCLE DISTRIBUTION</Text>
+                        <Text style={styles.distributionSub}>
+                          Total sets logged across core anatomical groups
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.distributionContainer}>
+                      {muscleDistribution.map(({ group, setCount, percentage }) => (
+                        <View key={group} style={styles.distributionRow}>
+                          <View style={styles.distributionHeaderRow}>
+                            <View style={styles.groupLabelBadge}>
+                              <View
+                                style={[
+                                  styles.groupColorIndicator,
+                                  { backgroundColor: getMuscleBadgeColor(group) },
+                                ]}
+                              />
+                              <Text style={styles.groupNameText}>{group}</Text>
+                            </View>
+                            <Text style={styles.groupSetsText}>
+                              {setCount} sets ({percentage}%)
+                            </Text>
+                          </View>
+
+                          <View style={styles.distributionTrack}>
+                            <View
+                              style={[
+                                styles.distributionFill,
+                                {
+                                  width: `${Math.max(percentage, setCount > 0 ? 3 : 0)}%`,
+                                  backgroundColor: getMuscleBadgeColor(group),
+                                },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+
+                  {/* BAR GRAPH */}
+                  <View style={styles.chartCard}>
+                    <View style={styles.chartHeaderBlock}>
+                      <View>
+                        <Text style={styles.chartTitle}>PROGRESS ANALYTICS</Text>
                         <Text style={styles.chartTotalValue}>
                           {totalAggregatedMetric.toLocaleString()}{' '}
                           <Text style={styles.chartUnitText}>{metricUnitLabel}</Text>
@@ -1074,7 +1460,6 @@ export default function App() {
                       </View>
                     </View>
 
-                    {/* Filter 1: Time Horizon Selector (Month, Year, All Time) */}
                     <View style={styles.filterControlRow}>
                       {(['month', 'year', 'all'] as TimeHorizon[]).map((h) => (
                         <TouchableOpacity
@@ -1094,7 +1479,6 @@ export default function App() {
                       ))}
                     </View>
 
-                    {/* Filter 2: Metric Type Selector (Volume, Duration, Reps) */}
                     <View style={styles.metricFilterRow}>
                       {(['volume', 'duration', 'reps'] as MetricType[]).map((m) => (
                         <TouchableOpacity
@@ -1114,7 +1498,6 @@ export default function App() {
                       ))}
                     </View>
 
-                    {/* THE INTERACTIVE BAR CHART */}
                     <View style={styles.barPlotArea}>
                       {graphData.map((item, index) => {
                         const ratio = maxChartValue > 0 ? item.value / maxChartValue : 0;
@@ -1122,12 +1505,9 @@ export default function App() {
 
                         return (
                           <View key={index} style={styles.barColumn}>
-                            {/* Value tooltip above column */}
                             <Text style={styles.barValueLabel}>
                               {item.value > 999 ? `${(item.value / 1000).toFixed(1)}k` : item.value > 0 ? item.value : ''}
                             </Text>
-
-                            {/* Flexible Track & Bar */}
                             <View style={styles.barTrack}>
                               <View
                                 style={[
@@ -1137,8 +1517,6 @@ export default function App() {
                                 ]}
                               />
                             </View>
-
-                            {/* X-Axis Axis Label */}
                             <Text style={styles.barXLabel} numberOfLines={1}>
                               {item.label}
                             </Text>
@@ -1150,7 +1528,7 @@ export default function App() {
                 </View>
               )}
 
-              {/* SUBTAB 2: CALENDAR */}
+              {/* CALENDAR */}
               {profileSubTab === 'calendar' && (
                 <View style={styles.calendarCard}>
                   <Text style={styles.calendarHeading}>Last 30 Days Consistency</Text>
@@ -1171,7 +1549,7 @@ export default function App() {
                 </View>
               )}
 
-              {/* SUBTAB 3: MEASUREMENTS */}
+              {/* MEASUREMENTS */}
               {profileSubTab === 'measurements' && (
                 <View>
                   <View style={styles.measurementsTopBar}>
@@ -1205,14 +1583,33 @@ export default function App() {
                 </View>
               )}
 
-              {/* SUBTAB 4: EXERCISES */}
+              {/* EXERCISES LIBRARY */}
               {profileSubTab === 'exercises' && (
                 <View>
-                  <Text style={styles.sectionHeading}>Exercise Library</Text>
-                  {PRESET_EXERCISES.map((ex) => (
+                  <View style={styles.measurementsTopBar}>
+                    <View>
+                      <Text style={styles.sectionHeading}>Exercise Library</Text>
+                      <Text style={styles.sectionSub}>{allExercises.length} total movements</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.addMeasurementBtn}
+                      onPress={() => setCustomExerciseModalVisible(true)}
+                    >
+                      <Text style={styles.addMeasurementBtnText}>+ New Exercise</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {allExercises.map((ex) => (
                     <View key={ex.id} style={styles.catalogCard}>
-                      <View>
-                        <Text style={styles.catalogName}>{ex.name}</Text>
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Text style={styles.catalogName}>{ex.name}</Text>
+                          {ex.isCustom && (
+                            <View style={styles.customBadge}>
+                              <Text style={styles.customBadgeText}>CUSTOM</Text>
+                            </View>
+                          )}
+                        </View>
                         <Text style={styles.catalogDetails}>
                           {ex.muscle} • {ex.equip}
                         </Text>
@@ -1229,7 +1626,7 @@ export default function App() {
         )}
       </View>
 
-      {/* FLOATING REST TIMER */}
+      {/* REST TIMER BANNER */}
       {restRemaining !== null && currentTab === 'workout' && (
         <View style={styles.timerBanner}>
           <View>
@@ -1271,7 +1668,65 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
-      {/* PLAYLIST CREATE/EDIT MODAL */}
+      {/* ============================================================ */}
+      {/* ADD CUSTOM EXERCISE MODAL                                    */}
+      {/* ============================================================ */}
+      <Modal visible={customExerciseModalVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalBg}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Create Custom Exercise</Text>
+              <TouchableOpacity onPress={() => setCustomExerciseModalVisible(false)}>
+                <Text style={styles.modalClose}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              style={styles.routineNameInput}
+              placeholder="Exercise Name (e.g. Bulgarian Split Squat)"
+              placeholderTextColor="#777"
+              value={customName}
+              onChangeText={setCustomName}
+            />
+
+            <Text style={styles.modalSubheading}>TARGET MUSCLE GROUP:</Text>
+            <View style={styles.pickerPillRow}>
+              {MUSCLE_GROUPS.map((m) => (
+                <TouchableOpacity
+                  key={m}
+                  style={[styles.selectionPill, customMuscle === m && styles.selectionPillActive]}
+                  onPress={() => setCustomMuscle(m)}
+                >
+                  <Text style={[styles.selectionPillText, customMuscle === m && styles.selectionPillTextActive]}>
+                    {m}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={[styles.modalSubheading, { marginTop: 14 }]}>EQUIPMENT TYPE:</Text>
+            <View style={styles.pickerPillRow}>
+              {EQUIPMENT_OPTIONS.map((eq) => (
+                <TouchableOpacity
+                  key={eq}
+                  style={[styles.selectionPill, customEquip === eq && styles.selectionPillActive]}
+                  onPress={() => setCustomEquip(eq)}
+                >
+                  <Text style={[styles.selectionPillText, customEquip === eq && styles.selectionPillTextActive]}>
+                    {eq}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSaveCustomExercise}>
+              <Text style={styles.saveBtnText}>Save Movement</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* CREATE / EDIT PLAYLIST MODAL */}
       <Modal visible={routineModalVisible} animationType="slide" transparent={true}>
         <View style={styles.modalBg}>
           <View style={styles.modalSheet}>
@@ -1293,7 +1748,7 @@ export default function App() {
             />
 
             <FlatList
-              data={PRESET_EXERCISES}
+              data={allExercises}
               keyExtractor={(item) => item.id}
               style={{ maxHeight: 320 }}
               renderItem={({ item }) => {
@@ -1387,19 +1842,29 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* EXERCISE PICKER MODAL */}
+      {/* EXERCISE PICKER MODAL (With Quick-Add Custom Button) */}
       <Modal visible={pickerVisible} animationType="slide" transparent={true}>
         <View style={styles.modalBg}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Movement</Text>
-              <TouchableOpacity onPress={() => setPickerVisible(false)}>
-                <Text style={styles.modalClose}>Done</Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <TouchableOpacity
+                  onPress={() => {
+                    setPickerVisible(false);
+                    setCustomExerciseModalVisible(true);
+                  }}
+                >
+                  <Text style={[styles.modalClose, { color: '#30D158' }]}>+ Custom</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setPickerVisible(false)}>
+                  <Text style={styles.modalClose}>Done</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             <FlatList
-              data={PRESET_EXERCISES}
+              data={allExercises}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <TouchableOpacity
@@ -1407,8 +1872,15 @@ export default function App() {
                   onPress={() => handleAddExercise(item.name)}
                 >
                   <View>
-                    <Text style={styles.modalRowTitle}>{item.name}</Text>
-                    <Text style={styles.modalRowMuscle}>{item.muscle}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={styles.modalRowTitle}>{item.name}</Text>
+                      {item.isCustom && (
+                        <View style={styles.customBadgeSmall}>
+                          <Text style={styles.customBadgeSmallText}>CUSTOM</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.modalRowMuscle}>{item.muscle} • {item.equip}</Text>
                   </View>
                   <Text style={styles.modalAddIcon}>+</Text>
                 </TouchableOpacity>
@@ -1425,6 +1897,108 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#121212',
+  },
+  authContainer: {
+    flex: 1,
+    backgroundColor: '#121212',
+  },
+  authScrollContent: {
+    padding: 24,
+    justifyContent: 'center',
+    minHeight: '100%',
+  },
+  authBrand: {
+    color: '#007AFF',
+    fontSize: 44,
+    fontWeight: '900',
+    letterSpacing: 2,
+    textAlign: 'center',
+  },
+  authTagline: {
+    color: '#8E8E93',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 32,
+  },
+  authToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#1C1C1E',
+    borderRadius: 10,
+    padding: 4,
+    marginBottom: 24,
+  },
+  authToggleBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  authToggleBtnActive: {
+    backgroundColor: '#007AFF',
+  },
+  authToggleText: {
+    color: '#8E8E93',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  authToggleTextActive: {
+    color: '#FFF',
+  },
+  authInputGroup: {
+    marginBottom: 16,
+  },
+  authInputLabel: {
+    color: '#8E8E93',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  authInput: {
+    backgroundColor: '#1C1C1E',
+    color: '#FFF',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    height: 48,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+  },
+  authPrimaryBtn: {
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    height: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  authPrimaryBtnText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  guestBtn: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  guestBtnText: {
+    color: '#8E8E93',
+    fontSize: 13,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  signOutBtn: {
+    backgroundColor: '#2C2C2E',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  signOutBtnText: {
+    color: '#FF3B30',
+    fontSize: 12,
+    fontWeight: '700',
   },
   screenScroll: {
     padding: 16,
@@ -1803,7 +2377,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
   },
-  // BAR CHART STYLING
   chartCard: {
     backgroundColor: '#1C1C1E',
     borderRadius: 14,
@@ -1820,9 +2393,56 @@ const styles = StyleSheet.create({
   },
   chartTitle: {
     color: '#8E8E93',
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '800',
     letterSpacing: 0.5,
+  },
+  distributionSub: {
+    color: '#636366',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  distributionContainer: {
+    marginTop: 6,
+  },
+  distributionRow: {
+    marginBottom: 12,
+  },
+  distributionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  groupLabelBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  groupColorIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  groupNameText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  groupSetsText: {
+    color: '#8E8E93',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  distributionTrack: {
+    height: 8,
+    backgroundColor: '#2C2C2E',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  distributionFill: {
+    height: '100%',
+    borderRadius: 4,
   },
   chartTotalValue: {
     color: '#FFF',
@@ -2031,6 +2651,34 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 15,
     fontWeight: '700',
+  },
+  customBadge: {
+    backgroundColor: '#2C2C2E',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  customBadgeText: {
+    color: '#007AFF',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  customBadgeSmall: {
+    backgroundColor: '#2C2C2E',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    marginLeft: 6,
+    borderWidth: 0.5,
+    borderColor: '#007AFF',
+  },
+  customBadgeSmallText: {
+    color: '#007AFF',
+    fontSize: 8,
+    fontWeight: '800',
   },
   catalogDetails: {
     color: '#8E8E93',
@@ -2392,6 +3040,36 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 15,
     marginVertical: 14,
+  },
+  modalSubheading: {
+    color: '#8E8E93',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  pickerPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  selectionPill: {
+    backgroundColor: '#2C2C2E',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  selectionPillActive: {
+    backgroundColor: '#007AFF',
+  },
+  selectionPillText: {
+    color: '#8E8E93',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  selectionPillTextActive: {
+    color: '#FFF',
   },
   modalRow: {
     flexDirection: 'row',

@@ -1,0 +1,24 @@
+{
+  "name": "lifting-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@nozbe/watermelondb": "^0.27.1",
+    "@react-native-community/netinfo": "^11.3.1",
+    "@supabase/supabase-js": "^2.39.0",
+    "expo": "~51.0.0",
+    "react": "18.2.0",
+    "react-native": "0.74.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@babel/plugin-proposal-decorators": "^7.24.1",
+    "@types/react": "~18.2.45",
+    "typescript": "^5.1.3"
+  }
+}

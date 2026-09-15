@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Lifting Tracker",
+    "slug": "lifting-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#121212",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.liftingtracker"
+    },
+    "android": {
+      "package": "com.anonymous.liftingtracker",
+      "adaptiveIcon": {
+        "backgroundColor": "#121212"
+      }
+    }
+  }
+}

@@ -1,23 +1,19 @@
 {
   "expo": {
-    "name": "Lifting Tracker",
+    "name": "lifting-tracker",
     "slug": "lifting-tracker",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "userInterfaceStyle": "dark",
-    "splash": {
-      "backgroundColor": "#121212",
-      "resizeMode": "contain"
-    },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.liftingtracker"
+      "infoPlist": {
+        "NSHealthShareUsageDescription": "This app requires access to read your real-time heart rate and active calories during workouts.",
+        "NSHealthUpdateUsageDescription": "This app writes workout sessions to Apple Health."
+      }
     },
     "android": {
-      "package": "com.anonymous.liftingtracker",
-      "adaptiveIcon": {
-        "backgroundColor": "#121212"
-      }
+      "permissions": [
+        "android.permission.health.READ_HEART_RATE",
+        "android.permission.health.READ_TOTAL_CALORIES_BURNED"
+      ]
     }
   }
 }

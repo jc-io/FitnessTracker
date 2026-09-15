@@ -26,6 +26,12 @@ import {
   CustomExercise,
 } from './src/model/models';
 import { supabase } from './src/lib/supabase';
+import {
+  initWatchHealth,
+  fetchLiveWatchMetrics,
+  setTargetWatchBpm,
+  getTargetWatchBpm,
+} from './src/lib/watchHealth';
 import { User, Session } from '@supabase/supabase-js';
 
 const adapter = new SQLiteAdapter({
@@ -47,34 +53,201 @@ export const database = new Database({
   ],
 });
 
-export type MuscleGroup = 'Chest' | 'Back' | 'Legs' | 'Arms' | 'Core';
+export type MajorMuscle = 'Chest' | 'Back' | 'Shoulders' | 'Arms' | 'Legs' | 'Glutes' | 'Core';
 
-interface ExerciseItem {
+export const MAJOR_MUSCLES: MajorMuscle[] = [
+  'Chest',
+  'Back',
+  'Shoulders',
+  'Arms',
+  'Legs',
+  'Glutes',
+  'Core',
+];
+
+export const MUSCLE_TAXONOMY: Record<MajorMuscle, string[]> = {
+  Chest: [
+    'Upper Chest (Clavicular)',
+    'Mid/Lower Chest (Sternal)',
+    'Inner/Outer Chest',
+  ],
+  Back: [
+    'Upper/Outer Lats',
+    'Mid-Back (Rhomboids/Lower Traps)',
+    'Lower Back (Erectors)',
+    'Upper Traps',
+  ],
+  Shoulders: [
+    'Front Delts (Anterior)',
+    'Side Delts (Lateral)',
+    'Rear Delts (Posterior)',
+  ],
+  Arms: [
+    'Biceps (Long Head)',
+    'Biceps (Short Head)',
+    'Brachialis',
+    'Triceps (Long Head)',
+    'Triceps (Lateral Head)',
+    'Triceps (Medial Head)',
+    'Forearms',
+  ],
+  Legs: [
+    'Quads (Rectus Femoris)',
+    'Quads (Vastus Lateralis)',
+    'Quads (Vastus Medialis)',
+    'Hamstrings (Curls)',
+    'Hamstrings (Hinge)',
+    'Calves (Gastrocnemius)',
+    'Calves (Soleus)',
+    'Adductors (Inner Thigh)',
+    'Abductors (Outer Thigh)',
+  ],
+  Glutes: [
+    'Gluteus Maximus',
+    'Gluteus Medius',
+    'Gluteus Minimus',
+    'Hip Flexors',
+  ],
+  Core: [
+    'Upper Rectus Abdominis',
+    'Lower Rectus Abdominis',
+    'Obliques',
+    'Transverse Abdominis (TVA)',
+    'Serratus Anterior',
+  ],
+};
+
+export interface ExerciseItem {
   id: string;
   name: string;
-  muscle: MuscleGroup;
+  primaryMuscle: MajorMuscle;
+  primarySubgroup: string;
+  secondaryMuscles: MajorMuscle[];
+  secondarySubgroups: string[];
   equip: string;
   isCustom?: boolean;
 }
 
 const PRESET_EXERCISES: ExerciseItem[] = [
-  { id: 'bench_press', name: 'Bench Press (Barbell)', muscle: 'Chest', equip: 'Barbell' },
-  { id: 'incline_db_press', name: 'Incline Dumbbell Press', muscle: 'Chest', equip: 'Dumbbell' },
-  { id: 'cable_fly', name: 'Cable Chest Fly', muscle: 'Chest', equip: 'Cable' },
-  { id: 'squat', name: 'Squat (Barbell)', muscle: 'Legs', equip: 'Barbell' },
-  { id: 'deadlift', name: 'Deadlift (Barbell)', muscle: 'Back', equip: 'Barbell' },
-  { id: 'leg_press', name: 'Leg Press (Machine)', muscle: 'Legs', equip: 'Machine' },
-  { id: 'lat_pulldown', name: 'Lat Pulldown (Cable)', muscle: 'Back', equip: 'Cable' },
-  { id: 'barbell_row', name: 'Barbell Bent Over Row', muscle: 'Back', equip: 'Barbell' },
-  { id: 'overhead_press', name: 'Overhead Press (Barbell)', muscle: 'Arms', equip: 'Barbell' },
-  { id: 'barbell_curl', name: 'Barbell Bicep Curl', muscle: 'Arms', equip: 'Barbell' },
-  { id: 'tricep_pushdown', name: 'Triceps Rope Pushdown', muscle: 'Arms', equip: 'Cable' },
-  { id: 'hanging_leg_raise', name: 'Hanging Leg Raise', muscle: 'Core', equip: 'Bodyweight' },
-  { id: 'plank', name: 'Plank', muscle: 'Core', equip: 'Bodyweight' },
-  { id: 'ab_wheel', name: 'Ab Wheel Rollout', muscle: 'Core', equip: 'Bodyweight' },
+  {
+    id: 'bench_press',
+    name: 'Bench Press (Barbell)',
+    primaryMuscle: 'Chest',
+    primarySubgroup: 'Mid/Lower Chest (Sternal)',
+    secondaryMuscles: ['Arms', 'Shoulders'],
+    secondarySubgroups: ['Triceps (Lateral Head)', 'Front Delts (Anterior)'],
+    equip: 'Barbell',
+  },
+  {
+    id: 'incline_db_press',
+    name: 'Incline Dumbbell Press',
+    primaryMuscle: 'Chest',
+    primarySubgroup: 'Upper Chest (Clavicular)',
+    secondaryMuscles: ['Arms', 'Shoulders'],
+    secondarySubgroups: ['Triceps (Long Head)', 'Front Delts (Anterior)'],
+    equip: 'Dumbbell',
+  },
+  {
+    id: 'cable_fly',
+    name: 'Cable Chest Fly',
+    primaryMuscle: 'Chest',
+    primarySubgroup: 'Inner/Outer Chest',
+    secondaryMuscles: ['Shoulders'],
+    secondarySubgroups: ['Front Delts (Anterior)'],
+    equip: 'Cable',
+  },
+  {
+    id: 'squat',
+    name: 'Squat (Barbell)',
+    primaryMuscle: 'Legs',
+    primarySubgroup: 'Quads (Vastus Lateralis)',
+    secondaryMuscles: ['Glutes', 'Core', 'Back'],
+    secondarySubgroups: ['Gluteus Maximus', 'Lower Back (Erectors)', 'Upper Rectus Abdominis'],
+    equip: 'Barbell',
+  },
+  {
+    id: 'deadlift',
+    name: 'Deadlift (Barbell)',
+    primaryMuscle: 'Back',
+    primarySubgroup: 'Lower Back (Erectors)',
+    secondaryMuscles: ['Glutes', 'Legs', 'Back'],
+    secondarySubgroups: ['Gluteus Maximus', 'Hamstrings (Hinge)', 'Upper Traps'],
+    equip: 'Barbell',
+  },
+  {
+    id: 'pullup',
+    name: 'Pull-up',
+    primaryMuscle: 'Back',
+    primarySubgroup: 'Upper/Outer Lats',
+    secondaryMuscles: ['Arms', 'Core'],
+    secondarySubgroups: ['Biceps (Short Head)', 'Upper Rectus Abdominis'],
+    equip: 'Bodyweight',
+  },
+  {
+    id: 'overhead_press',
+    name: 'Overhead Press (Barbell)',
+    primaryMuscle: 'Shoulders',
+    primarySubgroup: 'Front Delts (Anterior)',
+    secondaryMuscles: ['Arms', 'Core'],
+    secondarySubgroups: ['Triceps (Lateral Head)', 'Upper Rectus Abdominis'],
+    equip: 'Barbell',
+  },
+  {
+    id: 'lateral_raise',
+    name: 'Lateral Raise (Dumbbell)',
+    primaryMuscle: 'Shoulders',
+    primarySubgroup: 'Side Delts (Lateral)',
+    secondaryMuscles: ['Back'],
+    secondarySubgroups: ['Upper Traps'],
+    equip: 'Dumbbell',
+  },
+  {
+    id: 'face_pull',
+    name: 'Face Pull (Cable)',
+    primaryMuscle: 'Shoulders',
+    primarySubgroup: 'Rear Delts (Posterior)',
+    secondaryMuscles: ['Back'],
+    secondarySubgroups: ['Mid-Back (Rhomboids/Lower Traps)', 'Upper Traps'],
+    equip: 'Cable',
+  },
+  {
+    id: 'barbell_curl',
+    name: 'Barbell Bicep Curl',
+    primaryMuscle: 'Arms',
+    primarySubgroup: 'Biceps (Short Head)',
+    secondaryMuscles: ['Arms'],
+    secondarySubgroups: ['Brachialis', 'Forearms'],
+    equip: 'Barbell',
+  },
+  {
+    id: 'tricep_pushdown',
+    name: 'Triceps Rope Pushdown',
+    primaryMuscle: 'Arms',
+    primarySubgroup: 'Triceps (Lateral Head)',
+    secondaryMuscles: ['Arms'],
+    secondarySubgroups: ['Triceps (Medial Head)'],
+    equip: 'Cable',
+  },
+  {
+    id: 'hanging_leg_raise',
+    name: 'Hanging Leg Raise',
+    primaryMuscle: 'Core',
+    primarySubgroup: 'Lower Rectus Abdominis',
+    secondaryMuscles: ['Glutes', 'Arms'],
+    secondarySubgroups: ['Hip Flexors', 'Forearms'],
+    equip: 'Bodyweight',
+  },
+  {
+    id: 'hip_thrust',
+    name: 'Barbell Hip Thrust',
+    primaryMuscle: 'Glutes',
+    primarySubgroup: 'Gluteus Maximus',
+    secondaryMuscles: ['Legs'],
+    secondarySubgroups: ['Hamstrings (Hinge)'],
+    equip: 'Barbell',
+  },
 ];
 
-const MUSCLE_GROUPS: MuscleGroup[] = ['Chest', 'Back', 'Legs', 'Arms', 'Core'];
 const EQUIPMENT_OPTIONS = ['Barbell', 'Dumbbell', 'Machine', 'Cable', 'Bodyweight'];
 
 type SetType = 'warmup' | 'normal' | 'drop' | 'failure';
@@ -124,6 +297,12 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [restRemaining, setRestRemaining] = useState<number | null>(null);
 
+  // Wearable live metrics
+  const [liveBpm, setLiveBpm] = useState<number | null>(null);
+  const [liveCalories, setLiveCalories] = useState<number | null>(null);
+  const [bpmInputModalVisible, setBpmInputModalVisible] = useState(false);
+  const [customBpmValue, setCustomBpmValue] = useState('');
+
   const [routines, setRoutines] = useState<RoutineWithExercises[]>([]);
   const [routineModalVisible, setRoutineModalVisible] = useState(false);
   const [editingRoutineId, setEditingRoutineId] = useState<string | null>(null);
@@ -137,11 +316,14 @@ export default function App() {
   const [metricValue, setMetricValue] = useState('');
   const [addMeasurementModal, setAddMeasurementModal] = useState(false);
 
-  // Custom Exercise State
+  // Custom Exercise Builder
   const [customExercises, setCustomExercises] = useState<ExerciseItem[]>([]);
   const [customExerciseModalVisible, setCustomExerciseModalVisible] = useState(false);
   const [customName, setCustomName] = useState('');
-  const [customMuscle, setCustomMuscle] = useState<MuscleGroup>('Chest');
+  const [customPrimaryMajor, setCustomPrimaryMajor] = useState<MajorMuscle>('Chest');
+  const [customPrimarySub, setCustomPrimarySub] = useState<string>(MUSCLE_TAXONOMY['Chest'][0]);
+  const [customSecondaryMajors, setCustomSecondaryMajors] = useState<MajorMuscle[]>([]);
+  const [customSecondarySubs, setCustomSecondarySubs] = useState<string[]>([]);
   const [customEquip, setCustomEquip] = useState('Barbell');
 
   useEffect(() => {
@@ -199,6 +381,29 @@ export default function App() {
     return () => clearInterval(interval);
   }, [restRemaining]);
 
+  // Live Wearable Sync Loop
+  useEffect(() => {
+    if (activeSession) {
+      initWatchHealth();
+
+      fetchLiveWatchMetrics(activeSession.startedAt).then((data) => {
+        if (data.heartRate !== null) setLiveBpm(data.heartRate);
+        if (data.calories !== null) setLiveCalories(data.calories);
+      });
+
+      const watchInterval = setInterval(async () => {
+        const data = await fetchLiveWatchMetrics(activeSession.startedAt);
+        if (data.heartRate !== null) setLiveBpm(data.heartRate);
+        if (data.calories !== null) setLiveCalories(data.calories);
+      }, 3000);
+
+      return () => clearInterval(watchInterval);
+    } else {
+      setLiveBpm(null);
+      setLiveCalories(null);
+    }
+  }, [activeSession]);
+
   async function loadCustomExercises() {
     try {
       const records = await database
@@ -206,23 +411,65 @@ export default function App() {
         .query(Q.sortBy('created_at', Q.asc))
         .fetch();
 
-      const mapped: ExerciseItem[] = records.map((r) => ({
-        id: r.id,
-        name: r.name,
-        muscle: r.muscle as MuscleGroup,
-        equip: r.equip,
-        isCustom: true,
-      }));
+      const mapped: ExerciseItem[] = records.map((r) => {
+        let secMajors: MajorMuscle[] = [];
+        let secSubs: string[] = [];
+        try {
+          secMajors = r.secondaryMuscles ? JSON.parse(r.secondaryMuscles) : [];
+          secSubs = r.secondarySubgroups ? JSON.parse(r.secondarySubgroups) : [];
+        } catch {
+          secMajors = [];
+          secSubs = [];
+        }
+
+        return {
+          id: r.id,
+          name: r.name,
+          primaryMuscle: (r.primaryMuscle as MajorMuscle) || 'Arms',
+          primarySubgroup: r.primarySubgroup || 'General',
+          secondaryMuscles: secMajors,
+          secondarySubgroups: secSubs,
+          equip: r.equip,
+          isCustom: true,
+        };
+      });
       setCustomExercises(mapped);
     } catch (e) {
       console.error('Custom exercise load error:', e);
     }
   }
 
-  // Combined catalog (Presets + User Custom Creations)
   const allExercises = useMemo(() => {
     return [...PRESET_EXERCISES, ...customExercises];
   }, [customExercises]);
+
+  function handleSelectPrimaryMajor(major: MajorMuscle) {
+    setCustomPrimaryMajor(major);
+    setCustomPrimarySub(MUSCLE_TAXONOMY[major][0]);
+    setCustomSecondaryMajors((prev) => prev.filter((m) => m !== major));
+    const allowedSubs = MUSCLE_TAXONOMY[major];
+    setCustomSecondarySubs((prev) => prev.filter((s) => !allowedSubs.includes(s)));
+  }
+
+  function toggleSecondaryMajor(major: MajorMuscle) {
+    if (major === customPrimaryMajor) return;
+    if (customSecondaryMajors.includes(major)) {
+      setCustomSecondaryMajors((prev) => prev.filter((m) => m !== major));
+      const subsToRemove = MUSCLE_TAXONOMY[major];
+      setCustomSecondarySubs((prev) => prev.filter((s) => !subsToRemove.includes(s)));
+    } else {
+      setCustomSecondaryMajors((prev) => [...prev, major]);
+    }
+  }
+
+  function toggleSecondarySubgroup(sub: string) {
+    if (sub === customPrimarySub) return;
+    if (customSecondarySubs.includes(sub)) {
+      setCustomSecondarySubs((prev) => prev.filter((s) => s !== sub));
+    } else {
+      setCustomSecondarySubs((prev) => [...prev, sub]);
+    }
+  }
 
   async function handleSaveCustomExercise() {
     if (!customName.trim()) {
@@ -243,14 +490,20 @@ export default function App() {
     await database.write(async () => {
       await database.get<CustomExercise>('custom_exercises').create((rec) => {
         rec.name = trimmed;
-        rec.muscle = customMuscle;
+        rec.primaryMuscle = customPrimaryMajor;
+        rec.primarySubgroup = customPrimarySub;
+        rec.secondaryMuscles = JSON.stringify(customSecondaryMajors);
+        rec.secondarySubgroups = JSON.stringify(customSecondarySubs);
         rec.equip = customEquip;
         rec.createdAt = new Date();
       });
     });
 
     setCustomName('');
-    setCustomMuscle('Chest');
+    setCustomPrimaryMajor('Chest');
+    setCustomPrimarySub(MUSCLE_TAXONOMY['Chest'][0]);
+    setCustomSecondaryMajors([]);
+    setCustomSecondarySubs([]);
     setCustomEquip('Barbell');
     setCustomExerciseModalVisible(false);
     await loadCustomExercises();
@@ -736,6 +989,8 @@ export default function App() {
             await activeSession.update((record) => {
               record.status = 'completed';
               record.endedAt = new Date();
+              if (liveCalories !== null) record.calories = liveCalories;
+              if (liveBpm !== null) record.avgBpm = liveBpm;
             });
           });
           setActiveSession(null);
@@ -747,6 +1002,22 @@ export default function App() {
         },
       },
     ]);
+  }
+
+  function handleOpenBpmModal() {
+    setCustomBpmValue(String(getTargetWatchBpm()));
+    setBpmInputModalVisible(true);
+  }
+
+  function handleSaveCustomBpm() {
+    const parsed = parseInt(customBpmValue.trim(), 10);
+    if (!isNaN(parsed) && parsed >= 30 && parsed <= 250) {
+      setTargetWatchBpm(parsed);
+      setLiveBpm(parsed);
+    } else {
+      Alert.alert('Invalid BPM', 'Please enter a heart rate between 30 and 250.');
+    }
+    setBpmInputModalVisible(false);
   }
 
   function formatTime(sec: number) {
@@ -777,17 +1048,19 @@ export default function App() {
     return Math.max(0, Math.round((end.getTime() - start.getTime()) / (1000 * 60)));
   }
 
-  // Muscle Distribution
   const muscleDistribution = useMemo(() => {
-    const counts: Record<MuscleGroup, number> = {
+    const majorScores: Record<MajorMuscle, number> = {
       Chest: 0,
       Back: 0,
-      Legs: 0,
+      Shoulders: 0,
       Arms: 0,
+      Legs: 0,
+      Glutes: 0,
       Core: 0,
     };
 
-    let totalCompletedSets = 0;
+    const subScores: Record<string, number> = {};
+    let totalScore = 0;
 
     historyList.forEach((h) => {
       h.exercises.forEach((ex) => {
@@ -795,25 +1068,39 @@ export default function App() {
         if (completedSetsCount === 0) return;
 
         const found = allExercises.find((p) => p.name === ex.name);
-        const group: MuscleGroup = found?.muscle || 'Arms';
+        const primaryMajor: MajorMuscle = found?.primaryMuscle || 'Arms';
+        const primarySub: string = found?.primarySubgroup || 'General';
+        const secMajors: MajorMuscle[] = found?.secondaryMuscles || [];
+        const secSubs: string[] = found?.secondarySubgroups || [];
 
-        counts[group] += completedSetsCount;
-        totalCompletedSets += completedSetsCount;
+        majorScores[primaryMajor] += completedSetsCount * 1.0;
+        subScores[primarySub] = (subScores[primarySub] || 0) + completedSetsCount * 1.0;
+        totalScore += completedSetsCount * 1.0;
+
+        secMajors.forEach((secM) => {
+          majorScores[secM] += completedSetsCount * 0.5;
+          totalScore += completedSetsCount * 0.5;
+        });
+
+        secSubs.forEach((secS) => {
+          subScores[secS] = (subScores[secS] || 0) + completedSetsCount * 0.5;
+        });
       });
     });
 
-    return MUSCLE_GROUPS.map((group) => {
-      const setCount = counts[group];
-      const percentage = totalCompletedSets > 0 ? Math.round((setCount / totalCompletedSets) * 100) : 0;
+    const majorList = MAJOR_MUSCLES.map((group) => {
+      const score = majorScores[group];
+      const percentage = totalScore > 0 ? Math.round((score / totalScore) * 100) : 0;
       return {
         group,
-        setCount,
+        score: Math.round(score * 10) / 10,
         percentage,
       };
     });
+
+    return { majorList, subScores, totalScore };
   }, [historyList, allExercises]);
 
-  // Bar Graph Calculations
   const graphData: ChartBucket[] = useMemo(() => {
     const now = new Date();
 
@@ -919,18 +1206,22 @@ export default function App() {
     return { date: d, dayNum: d.getDate(), hasTrained: isCompleted };
   });
 
-  const getMuscleBadgeColor = (group: MuscleGroup) => {
+  const getMuscleBadgeColor = (group: MajorMuscle) => {
     switch (group) {
       case 'Chest':
         return '#007AFF';
       case 'Back':
         return '#30D158';
-      case 'Legs':
-        return '#FF9500';
+      case 'Shoulders':
+        return '#5AC8FA';
       case 'Arms':
         return '#AF52DE';
+      case 'Legs':
+        return '#FF9500';
+      case 'Glutes':
+        return '#FF2D55';
       case 'Core':
-        return '#FF3B30';
+        return '#FFCC00';
       default:
         return '#007AFF';
     }
@@ -1046,7 +1337,9 @@ export default function App() {
       )}
 
       <View style={{ flex: 1 }}>
-        {/* HOME TAB */}
+        {/* ============================================================ */}
+        {/* 1. HOME TAB (Activity Feed)                                  */}
+        {/* ============================================================ */}
         {currentTab === 'home' && (
           <View style={{ flex: 1 }}>
             <View style={styles.homeHeader}>
@@ -1112,6 +1405,14 @@ export default function App() {
                           <Text style={styles.statCellValue}>{totalSets}</Text>
                           <Text style={styles.statCellLabel}>Sets</Text>
                         </View>
+                        {session.calories ? (
+                          <View style={styles.statCell}>
+                            <Text style={[styles.statCellValue, { color: '#FF9500' }]}>
+                              🔥 {session.calories}
+                            </Text>
+                            <Text style={styles.statCellLabel}>kcal</Text>
+                          </View>
+                        ) : null}
                       </View>
 
                       {isExpanded ? (
@@ -1150,7 +1451,9 @@ export default function App() {
           </View>
         )}
 
-        {/* WORKOUT TAB */}
+        {/* ============================================================ */}
+        {/* 2. WORKOUT TAB (Active Logger & Routines)                   */}
+        {/* ============================================================ */}
         {currentTab === 'workout' && (
           activeSession ? (
             <View style={{ flex: 1 }}>
@@ -1164,6 +1467,7 @@ export default function App() {
                 </TouchableOpacity>
               </View>
 
+              {/* Workout Ribbon with Interactive Watch BPM and Live Calories */}
               <View style={styles.ribbon}>
                 <View style={styles.ribbonItem}>
                   <Text style={styles.ribbonValue}>{activeSession.totalTonnage.toLocaleString()} lbs</Text>
@@ -1175,9 +1479,21 @@ export default function App() {
                   <Text style={styles.ribbonLabel}>Total Reps</Text>
                 </View>
                 <View style={styles.ribbonDivider} />
+
+                {/* Tappable Heart Rate Cell */}
+                <TouchableOpacity style={styles.ribbonItem} activeOpacity={0.7} onPress={handleOpenBpmModal}>
+                  <Text style={[styles.ribbonValue, { color: liveBpm ? '#FF3B30' : '#8E8E93' }]}>
+                    {liveBpm ? `❤️ ${liveBpm}` : '—'}
+                  </Text>
+                  <Text style={styles.ribbonLabel}>{liveBpm ? 'BPM (Tap)' : 'Heart Rate'}</Text>
+                </TouchableOpacity>
+
+                <View style={styles.ribbonDivider} />
                 <View style={styles.ribbonItem}>
-                  <Text style={styles.ribbonValue}>{sessionExercises.length}</Text>
-                  <Text style={styles.ribbonLabel}>Exercises</Text>
+                  <Text style={[styles.ribbonValue, { color: liveCalories ? '#FF9500' : '#8E8E93' }]}>
+                    {liveCalories ? `🔥 ${liveCalories}` : '—'}
+                  </Text>
+                  <Text style={styles.ribbonLabel}>Active kcal</Text>
                 </View>
               </View>
 
@@ -1339,7 +1655,9 @@ export default function App() {
           )
         )}
 
-        {/* PROFILE TAB */}
+        {/* ============================================================ */}
+        {/* 3. PROFILE TAB (Stats, Calendar, Measurements, Exercises)   */}
+        {/* ============================================================ */}
         {currentTab === 'profile' && (
           <View style={{ flex: 1 }}>
             <View style={styles.profileHeader}>
@@ -1403,48 +1721,66 @@ export default function App() {
                     </View>
                   </View>
 
-                  {/* MUSCLE DISTRIBUTION */}
+                  {/* HIERARCHICAL MUSCLE DISTRIBUTION CARD */}
                   <View style={styles.chartCard}>
                     <View style={styles.chartHeaderBlock}>
                       <View>
                         <Text style={styles.chartTitle}>TARGET MUSCLE DISTRIBUTION</Text>
                         <Text style={styles.distributionSub}>
-                          Total sets logged across core anatomical groups
+                          Primary (1.0x) • Secondary (0.5x)
                         </Text>
                       </View>
                     </View>
 
                     <View style={styles.distributionContainer}>
-                      {muscleDistribution.map(({ group, setCount, percentage }) => (
-                        <View key={group} style={styles.distributionRow}>
-                          <View style={styles.distributionHeaderRow}>
-                            <View style={styles.groupLabelBadge}>
+                      {muscleDistribution.majorList.map(({ group, score, percentage }) => {
+                        const relatedSubs = MUSCLE_TAXONOMY[group] || [];
+                        const activeSubs = relatedSubs.filter(
+                          (sub) => (muscleDistribution.subScores[sub] || 0) > 0
+                        );
+
+                        return (
+                          <View key={group} style={styles.distributionRow}>
+                            <View style={styles.distributionHeaderRow}>
+                              <View style={styles.groupLabelBadge}>
+                                <View
+                                  style={[
+                                    styles.groupColorIndicator,
+                                    { backgroundColor: getMuscleBadgeColor(group) },
+                                  ]}
+                                />
+                                <Text style={styles.groupNameText}>{group}</Text>
+                              </View>
+                              <Text style={styles.groupSetsText}>
+                                {score} pts ({percentage}%)
+                              </Text>
+                            </View>
+
+                            <View style={styles.distributionTrack}>
                               <View
                                 style={[
-                                  styles.groupColorIndicator,
-                                  { backgroundColor: getMuscleBadgeColor(group) },
+                                  styles.distributionFill,
+                                  {
+                                    width: `${Math.max(percentage, score > 0 ? 3 : 0)}%`,
+                                    backgroundColor: getMuscleBadgeColor(group),
+                                  },
                                 ]}
                               />
-                              <Text style={styles.groupNameText}>{group}</Text>
                             </View>
-                            <Text style={styles.groupSetsText}>
-                              {setCount} sets ({percentage}%)
-                            </Text>
-                          </View>
 
-                          <View style={styles.distributionTrack}>
-                            <View
-                              style={[
-                                styles.distributionFill,
-                                {
-                                  width: `${Math.max(percentage, setCount > 0 ? 3 : 0)}%`,
-                                  backgroundColor: getMuscleBadgeColor(group),
-                                },
-                              ]}
-                            />
+                            {/* Sub-Group Highlights */}
+                            {activeSubs.length > 0 && (
+                              <View style={styles.subgroupBreakdownWrap}>
+                                {activeSubs.map((subName) => (
+                                  <Text key={subName} style={styles.subgroupBadgeText}>
+                                    {subName}: {muscleDistribution.subScores[subName]} pts
+                                  </Text>
+                                ))}
+                              </View>
+                            )}
                           </View>
-                        </View>
-                      ))}
+                        );
+                      })}
                     </View>
                   </View>
 
@@ -1611,11 +1947,16 @@ export default function App() {
                           )}
                         </View>
                         <Text style={styles.catalogDetails}>
-                          {ex.muscle} • {ex.equip}
+                          Primary: <Text style={{ color: '#007AFF' }}>{ex.primarySubgroup}</Text>
                         </Text>
+                        {ex.secondarySubgroups.length > 0 && (
+                          <Text style={styles.catalogDetailsSub}>
+                            Secondary: {ex.secondarySubgroups.join(', ')}
+                          </Text>
+                        )}
                       </View>
                       <View style={styles.prBadgeContainer}>
-                        <Text style={styles.prBadgeText}>1RM PR: —</Text>
+                        <Text style={styles.prBadgeText}>{ex.equip}</Text>
                       </View>
                     </View>
                   ))}
@@ -1625,6 +1966,38 @@ export default function App() {
           </View>
         )}
       </View>
+
+      {/* BPM INPUT MODAL */}
+      <Modal visible={bpmInputModalVisible} animationType="fade" transparent={true}>
+        <View style={styles.modalBgCenter}>
+          <View style={styles.modalCenterBox}>
+            <Text style={styles.modalTitle}>Set Watch Heart Rate</Text>
+            <Text style={styles.modalBpmHelp}>
+              Input the BPM from your smartwatch or Extended Controls simulator.
+            </Text>
+            <TextInput
+              style={styles.bpmTextInput}
+              keyboardType="numeric"
+              placeholder="e.g. 163"
+              placeholderTextColor="#777"
+              value={customBpmValue}
+              onChangeText={setCustomBpmValue}
+              autoFocus={true}
+            />
+            <View style={styles.modalCenterBtnRow}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setBpmInputModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalApplyBtn} onPress={handleSaveCustomBpm}>
+                <Text style={styles.modalApplyText}>Apply BPM</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* REST TIMER BANNER */}
       {restRemaining !== null && currentTab === 'workout' && (
@@ -1668,9 +2041,7 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
-      {/* ============================================================ */}
-      {/* ADD CUSTOM EXERCISE MODAL                                    */}
-      {/* ============================================================ */}
+      {/* CUSTOM EXERCISE BUILDER MODAL */}
       <Modal visible={customExerciseModalVisible} animationType="slide" transparent={true}>
         <View style={styles.modalBg}>
           <View style={styles.modalSheet}>
@@ -1681,43 +2052,149 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            <TextInput
-              style={styles.routineNameInput}
-              placeholder="Exercise Name (e.g. Bulgarian Split Squat)"
-              placeholderTextColor="#777"
-              value={customName}
-              onChangeText={setCustomName}
-            />
+            <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
+              <TextInput
+                style={styles.routineNameInput}
+                placeholder="Exercise Name (e.g. Incline Close-Grip Bench)"
+                placeholderTextColor="#777"
+                value={customName}
+                onChangeText={setCustomName}
+              />
 
-            <Text style={styles.modalSubheading}>TARGET MUSCLE GROUP:</Text>
-            <View style={styles.pickerPillRow}>
-              {MUSCLE_GROUPS.map((m) => (
-                <TouchableOpacity
-                  key={m}
-                  style={[styles.selectionPill, customMuscle === m && styles.selectionPillActive]}
-                  onPress={() => setCustomMuscle(m)}
-                >
-                  <Text style={[styles.selectionPillText, customMuscle === m && styles.selectionPillTextActive]}>
-                    {m}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+              <Text style={styles.modalSubheading}>
+                1. PRIMARY MUSCLE <Text style={{ color: '#007AFF' }}>(CHOOSE 1)</Text>:
+              </Text>
+              <View style={styles.pickerPillRow}>
+                {MAJOR_MUSCLES.map((m) => (
+                  <TouchableOpacity
+                    key={m}
+                    style={[
+                      styles.selectionPill,
+                      customPrimaryMajor === m && styles.selectionPillActive,
+                    ]}
+                    onPress={() => handleSelectPrimaryMajor(m)}
+                  >
+                    <Text
+                      style={[
+                        styles.selectionPillText,
+                        customPrimaryMajor === m && styles.selectionPillTextActive,
+                      ]}
+                    >
+                      {customPrimaryMajor === m ? `✓ ${m}` : m}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
-            <Text style={[styles.modalSubheading, { marginTop: 14 }]}>EQUIPMENT TYPE:</Text>
-            <View style={styles.pickerPillRow}>
-              {EQUIPMENT_OPTIONS.map((eq) => (
-                <TouchableOpacity
-                  key={eq}
-                  style={[styles.selectionPill, customEquip === eq && styles.selectionPillActive]}
-                  onPress={() => setCustomEquip(eq)}
-                >
-                  <Text style={[styles.selectionPillText, customEquip === eq && styles.selectionPillTextActive]}>
-                    {eq}
+              <Text style={[styles.modalSubheading, { marginTop: 12 }]}>
+                PRIMARY SUB-GROUP <Text style={{ color: '#30D158' }}>({customPrimaryMajor})</Text>:
+              </Text>
+              <View style={styles.pickerPillRow}>
+                {MUSCLE_TAXONOMY[customPrimaryMajor].map((sub) => (
+                  <TouchableOpacity
+                    key={sub}
+                    style={[
+                      styles.subSelectionPill,
+                      customPrimarySub === sub && styles.subSelectionPillActive,
+                    ]}
+                    onPress={() => setCustomPrimarySub(sub)}
+                  >
+                    <Text
+                      style={[
+                        styles.subSelectionPillText,
+                        customPrimarySub === sub && styles.subSelectionPillTextActive,
+                      ]}
+                    >
+                      {customPrimarySub === sub ? `✓ ${sub}` : sub}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={[styles.modalSubheading, { marginTop: 14 }]}>
+                2. SECONDARY MUSCLES <Text style={{ color: '#8E8E93' }}>(OPTIONAL)</Text>:
+              </Text>
+              <View style={styles.pickerPillRow}>
+                {MAJOR_MUSCLES.map((m) => {
+                  const isPrimary = customPrimaryMajor === m;
+                  const isSecondary = customSecondaryMajors.includes(m);
+
+                  return (
+                    <TouchableOpacity
+                      key={m}
+                      disabled={isPrimary}
+                      style={[
+                        styles.selectionPill,
+                        isSecondary && styles.secondaryPillActive,
+                        isPrimary && { opacity: 0.25 },
+                      ]}
+                      onPress={() => toggleSecondaryMajor(m)}
+                    >
+                      <Text
+                        style={[
+                          styles.selectionPillText,
+                          isSecondary && styles.secondaryPillTextActive,
+                        ]}
+                      >
+                        {isPrimary ? `${m} (Primary)` : isSecondary ? `+ ${m}` : m}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {customSecondaryMajors.length > 0 && (
+                <View style={{ marginTop: 8 }}>
+                  <Text style={styles.modalSubheading}>
+                    SECONDARY SUB-GROUPS <Text style={{ color: '#30D158' }}>(MULTI-SELECT)</Text>:
                   </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                  {customSecondaryMajors.map((major) => (
+                    <View key={major} style={{ marginBottom: 8 }}>
+                      <Text style={styles.secondaryGroupHeader}>{major}:</Text>
+                      <View style={styles.pickerPillRow}>
+                        {MUSCLE_TAXONOMY[major].map((sub) => {
+                          const isSelected = customSecondarySubs.includes(sub);
+                          return (
+                            <TouchableOpacity
+                              key={sub}
+                              style={[
+                                styles.subSelectionPill,
+                                isSelected && styles.secondaryPillActive,
+                              ]}
+                              onPress={() => toggleSecondarySubgroup(sub)}
+                            >
+                              <Text
+                                style={[
+                                  styles.subSelectionPillText,
+                                  isSelected && styles.secondaryPillTextActive,
+                                ]}
+                              >
+                                {isSelected ? `+ ${sub}` : sub}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <Text style={[styles.modalSubheading, { marginTop: 14 }]}>EQUIPMENT TYPE:</Text>
+              <View style={styles.pickerPillRow}>
+                {EQUIPMENT_OPTIONS.map((eq) => (
+                  <TouchableOpacity
+                    key={eq}
+                    style={[styles.selectionPill, customEquip === eq && styles.selectionPillActive]}
+                    onPress={() => setCustomEquip(eq)}
+                  >
+                    <Text style={[styles.selectionPillText, customEquip === eq && styles.selectionPillTextActive]}>
+                      {eq}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
 
             <TouchableOpacity style={styles.saveBtn} onPress={handleSaveCustomExercise}>
               <Text style={styles.saveBtnText}>Save Movement</Text>
@@ -1766,7 +2243,9 @@ export default function App() {
                   >
                     <View>
                       <Text style={styles.modalRowTitle}>{item.name}</Text>
-                      <Text style={styles.modalRowMuscle}>{item.muscle} • {item.equip}</Text>
+                      <Text style={styles.modalRowMuscle}>
+                        {item.primarySubgroup} • {item.equip}
+                      </Text>
                     </View>
                     <View style={[styles.selectorCircle, isSelected && styles.selectorCircleActive]}>
                       {isSelected && <Text style={styles.selectorCheck}>✓</Text>}
@@ -1842,7 +2321,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* EXERCISE PICKER MODAL (With Quick-Add Custom Button) */}
+      {/* EXERCISE PICKER MODAL */}
       <Modal visible={pickerVisible} animationType="slide" transparent={true}>
         <View style={styles.modalBg}>
           <View style={styles.modalSheet}>
@@ -1880,7 +2359,10 @@ export default function App() {
                         </View>
                       )}
                     </View>
-                    <Text style={styles.modalRowMuscle}>{item.muscle} • {item.equip}</Text>
+                    <Text style={styles.modalRowMuscle}>
+                      {item.primarySubgroup}
+                      {item.secondarySubgroups.length > 0 ? ` (+${item.secondarySubgroups.length} sub)` : ''} • {item.equip}
+                    </Text>
                   </View>
                   <Text style={styles.modalAddIcon}>+</Text>
                 </TouchableOpacity>
@@ -2406,7 +2888,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   distributionRow: {
-    marginBottom: 12,
+    marginBottom: 14,
   },
   distributionHeaderRow: {
     flexDirection: 'row',
@@ -2442,6 +2924,21 @@ const styles = StyleSheet.create({
   },
   distributionFill: {
     height: '100%',
+    borderRadius: 4,
+  },
+  subgroupBreakdownWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  subgroupBadgeText: {
+    backgroundColor: '#252528',
+    color: '#A1A1A6',
+    fontSize: 10,
+    fontWeight: '600',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
     borderRadius: 4,
   },
   chartTotalValue: {
@@ -2685,6 +3182,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  catalogDetailsSub: {
+    color: '#636366',
+    fontSize: 11,
+    marginTop: 2,
+  },
   prBadgeContainer: {
     backgroundColor: '#2C2C2E',
     paddingVertical: 4,
@@ -2692,7 +3194,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   prBadgeText: {
-    color: '#FFD700',
+    color: '#A1A1A6',
     fontSize: 11,
     fontWeight: '700',
   },
@@ -2978,7 +3480,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     padding: 16,
-    maxHeight: '85%',
+    maxHeight: '90%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -2997,6 +3499,70 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  modalBgCenter: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalCenterBox: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
+    maxWidth: 340,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+  },
+  modalBpmHelp: {
+    color: '#8E8E93',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 6,
+    marginBottom: 16,
+  },
+  bpmTextInput: {
+    backgroundColor: '#2C2C2E',
+    color: '#FFF',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  modalCenterBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  modalCancelBtn: {
+    flex: 1,
+    backgroundColor: '#2C2C2E',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    color: '#8E8E93',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modalApplyBtn: {
+    flex: 1,
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalApplyText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
   metricPickerRow: {
     flexDirection: 'row',
@@ -3048,6 +3614,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 8,
   },
+  secondaryGroupHeader: {
+    color: '#A1A1A6',
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 4,
+    marginTop: 4,
+  },
   pickerPillRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -3057,7 +3630,7 @@ const styles = StyleSheet.create({
   selectionPill: {
     backgroundColor: '#2C2C2E',
     paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     borderRadius: 8,
   },
   selectionPillActive: {
@@ -3070,6 +3643,35 @@ const styles = StyleSheet.create({
   },
   selectionPillTextActive: {
     color: '#FFF',
+  },
+  subSelectionPill: {
+    backgroundColor: '#1E1E20',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+  },
+  subSelectionPillActive: {
+    backgroundColor: '#30D158',
+    borderColor: '#30D158',
+  },
+  subSelectionPillText: {
+    color: '#8E8E93',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  subSelectionPillTextActive: {
+    color: '#121212',
+    fontWeight: '800',
+  },
+  secondaryPillActive: {
+    backgroundColor: '#AF52DE',
+    borderColor: '#AF52DE',
+  },
+  secondaryPillTextActive: {
+    color: '#FFF',
+    fontWeight: '800',
   },
   modalRow: {
     flexDirection: 'row',
